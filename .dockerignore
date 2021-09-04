@@ -1,0 +1,6 @@
+dbdata
+Dockerfile
+*.code-workspace
+#config
+.gitignore
+.dockerignore
