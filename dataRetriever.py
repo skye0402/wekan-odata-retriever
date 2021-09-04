@@ -2,6 +2,7 @@ import time
 import configparser
 import requests
 import json
+import os
 import sqlite3
 from requests.auth import HTTPBasicAuth
 
@@ -31,8 +32,11 @@ def getWekanData(url, token, api, log = True):
     return data
 
 # Copy 1:1
-def copyAsIs(cF, card, nE):
-    nE[cF] = card[cF]
+def copyAsIs(cF, card, nE, isTimeStamp = False):
+    if isTimeStamp:
+        nE[cF] = str(card[cF])[:-5] + "Z" # Analytics cloud is limited to understand the standard timestamp (removing ms)
+    else:
+        nE[cF] = card[cF]
     return nE
 
 # Translate custom fields into flat list
@@ -55,62 +59,101 @@ def copyCustomFields(cF, card, nE, cFAllData):
                                     else: nE[cusFieldSet["name"]] = "X"
     return nE
 
-def copyListName(cF, card, nE, lists):
+def copyListName(cF, card, nE, lists, fieldMap):
     for list in lists:
         if list["_id"] == card[cF]:
-            nE["List"] = list["title"]
+            listName = list["title"]
+            listType = "undefined"
+            for f in fieldMap:
+                if fieldMap[f][0] == list["title"]: 
+                    listName = fieldMap[f][2] 
+                    listType = fieldMap[f][1]
+            nE["List"] = listName
+            nE["ListType"] = listType
             return nE
 
-def copySwimLaneName(cF, card, nE, swimlanes):
+def copySwimLaneName(cF, card, nE, swimlanes, fieldMap):
     for swimlane in swimlanes:
         if swimlane["_id"] == card[cF]:
-            nE["Swimlane"] = swimlane["title"]
+            swimlaneName = swimlane["title"]
+            swimlaneType = "undefined"
+            for f in fieldMap:
+                if fieldMap[f][0] == swimlane["title"]: 
+                    swimlaneName = fieldMap[f][2] 
+                    swimlaneType = fieldMap[f][1]
+            nE["Swimlane"] = swimlaneName
+            nE["SwimlaneType"] = swimlaneType
             return nE
 
-def copyUserName(cF, card, nE, users):
-    for user in users:
+def copyUserName(cF, card, nE, userAllData):
+    for user in userAllData:
         if user["_id"] == card[cF]:
-            nE["Creator"] = user["username"]
+            try:
+                nE["Creator"] = user["profile"]["fullname"]
+            except Exception as e:
+                nE["Creator"] = user["username"] #Backup in case full name is not maintained
             return nE
+
+def copyAssignees(cF, card, nE, userAllData):
+    strAssignees = ""
+    lenAss = len(card["assignees"])
+    for i in range(lenAss):
+        for user in userAllData:
+            if user["_id"] == card["assignees"][i]:
+                try:
+                    ass = user["profile"]["fullname"]
+                except Exception as e:
+                    ass = user["username"] #Backup in case full name is not maintained
+                strAssignees = strAssignees + ass
+                if i < (lenAss -1): strAssignees = strAssignees + "/"
+    nE["Assignees"] = strAssignees
+    return nE
 
 # Mapping function
-def copyCheck(cF, card, nE, users, lists, swimlanes, cFAllData):
+def copyCheck(cF, card, nE, userAllData, lists, swimlanes, cFAllData, fieldMap):
     if cF == '_id': return copyAsIs(cF, card, nE)
     elif cF == 'title': return copyAsIs(cF, card, nE)
     elif cF == 'customFields': return copyCustomFields(cF, card, nE, cFAllData)
-    elif cF == 'listId': return copyListName(cF, card, nE, lists)
-    elif cF == 'swimlaneId': return copySwimLaneName(cF, card, nE, swimlanes)
+    elif cF == 'listId': return copyListName(cF, card, nE, lists, fieldMap)
+    elif cF == 'swimlaneId': return copySwimLaneName(cF, card, nE, swimlanes, fieldMap)
     elif cF == 'type': return copyAsIs(cF, card, nE)
     elif cF == 'archived': return copyAsIs(cF, card, nE)
-    elif cF == 'createdAt': return copyAsIs(cF, card, nE)
-    elif cF == 'modifiedAt': return copyAsIs(cF, card, nE)
-    elif cF == 'dateLastActivity': return copyAsIs(cF, card, nE)
+    elif cF == 'createdAt': return copyAsIs(cF, card, nE, True)
+    elif cF == 'modifiedAt': return copyAsIs(cF, card, nE, True)
+    elif cF == 'dateLastActivity': return copyAsIs(cF, card, nE, True)
     #elif cF == 'description': return copyAsIs(cF, card, nE)
     elif cF == 'requestedBy': return copyAsIs(cF, card, nE)
-    elif cF == 'userId': return copyUserName(cF, card, nE, users)
-
+    elif cF == 'assignees': return copyAssignees(cF, card, nE, userAllData)
+    elif cF == 'userId': return copyUserName(cF, card, nE, userAllData)
+    #elif cF == 'dueAt': return copyAsIs(cF, card, nE, True) #needs some more thinking as due-date is only on some cards
     else:
         return nE # Pass back unchanged
 
-def createExportList(eL, users, lists, swimlanes, cFAllData):
+def createExportList(eL, userAllData, lists, swimlanes, cFAllData, fieldMap):
     nL = []
     for card in eL:
         nE = {}
         for cF in card:
             # Checks if field is part of export
-            nE = copyCheck(cF, card, nE, users, lists, swimlanes, cFAllData)
+            nE = copyCheck(cF, card, nE, userAllData, lists, swimlanes, cFAllData, fieldMap)
+        # Finally add a counter field = 1 to have a measure
+        nE['counter'] = "1"
+        # Append dataset
         nL = nL + [nE]
     return nL
 
 # To define the structure of the table
 def createTableStructure(exportList):
     tabStr = ""
+    dataModel = "namespace wekan.export;\n\nentity Cards {\n"
     for item in exportList:
         for field in item:
             dbfield = ''.join(field.split()).lower()
             tabStr = tabStr + dbfield + " TEXT, "
+            dataModel = dataModel + dbfield + " : String;\n"
         break #we just want one entry
-    return tabStr[:len(tabStr)-2]    
+    dataModel = dataModel + "}"
+    return tabStr[:len(tabStr)-2], dataModel    
 
 # Creates the sqlite table    
 def createTable(con, tabStr):
@@ -136,7 +179,7 @@ def insertIntoDb(con,list):
             insertString = "INSERT INTO CatalogService_Cards VALUES (" + dataSet + ")"
             dbCur.execute(insertString) #'2006-01-05','BUY','RHAT',100,35.14)")
     except Exception as e:
-        print("Error occured: " + e + ".")
+        print(e)
 
 def main():
     # Get configuration
@@ -160,14 +203,28 @@ def main():
         fMap[fieldmap] = fMapping
     # -------------- Parameters ------------------<<<
 
+    # Get run status - are we an init container?
+    try:
+        initContainerMode = os.environ['INITMODE']
+        if initContainerMode == "TRUE": 
+            print("Running in InitContainer-Mode.")
+            initContainerMode = True
+    except Exception:
+        initContainerMode = False
     # Start retrieving data from WeKan
     loopCondition = True
     while loopCondition:
+
         print("Starting new data retrieval.")
         # Login to WeKan and get Token
         token = getToken(wekanUrl)
-        # Get data 
+        # Get list of users 
         users = getWekanData(wekanUrl, token, "users")
+        # Get user detailed list
+        userAllData = []
+        for user in users:
+            userDetail = getWekanData(wekanUrl, token, "users/" + user["_id"])
+            userAllData = userAllData + [userDetail]
         # Get lists from board
         lists = getWekanData(wekanUrl, token, "boards/" + boardId + "/lists")
         # Get swimlanes from board
@@ -189,23 +246,31 @@ def main():
 
         print("Retrieved all data. Creating export list.")
         # Let's create an enriched list for export
-        exportList = createExportList(masterList, users, lists, swimlanes, cFAllData)
+        exportList = createExportList(masterList, userAllData, lists, swimlanes, cFAllData, fMap)
 
         # Then store the list as SQLite DB to be picked up by CAP
-        tableStructure = createTableStructure(exportList)
+        tableStructure,dataModel = createTableStructure(exportList)
         conSql=None
         try:
             conSql = sqlite3.connect('./dbdata/wekan-items.db')
         except Exception as e:
-            print("Error occured: " + e + ".")
+            print(e)
         if conSql != None:
             createTable(conSql, tableStructure)
             insertIntoDb(conSql, exportList)
             conSql.commit()
             conSql.close()
-        # Wait before the next call
-        print("Completed data polling and wrote new database successfully. Sleeping now for " + str(refreshTimer) + " seconds.")
-        time.sleep(refreshTimer)
+        if initContainerMode:
+            loopCondition = False
+            dataModelCds = open("./dbdata/data-model.cds", "w")
+            writtenBytes = dataModelCds.write(dataModel)
+            dataModelCds.close()
+            print("data-model.cds: " + str(writtenBytes) + " bytes written to shared folder.")
+            print("-------------- Initial run complete - ending program --------------")
+        else:
+            # Wait before the next call
+            print("Completed data polling and wrote new database successfully. Sleeping now for " + str(refreshTimer) + " seconds.")
+            time.sleep(refreshTimer)
 
 if __name__ == "__main__":
     main()
