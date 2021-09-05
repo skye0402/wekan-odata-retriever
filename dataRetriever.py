@@ -12,10 +12,10 @@ def endless_loop(msg):
     while True:
         pass
 
-def getToken(url):
+def getToken(url, wUsername, wPassword):
     callUrl = url + "users/login"
     headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "*/*"}
-    body = { "username": "gunter", "password": "pdapda0402"}
+    body = { "username": wUsername, "password": wPassword}
     response = requests.post(callUrl, headers = headers, data = body ) #TODO
     data = json.loads(response.text)
     print("Login to WeKan with response status " + str(response.status_code) + ".")
@@ -50,10 +50,13 @@ def copyCustomFields(cF, card, nE, cFAllData):
                             if cusFieldSet[cusField] == cFields[cField]: #Matches customer field in card
                                 if cusFieldSet["type"] == "dropdown":
                                     for cusValue in cusFieldSet["settings"]["dropdownItems"]:
-                                        if cFields["value"] == None:
+                                        try: # Sometimes the field is not None but completely missing
+                                            if cFields["value"] == None:
+                                                nE[cusFieldSet["name"]] = "" #Empty field
+                                            else:
+                                                if cusValue["_id"] == cFields["value"]: nE[cusFieldSet["name"]] = cusValue["name"]
+                                        except Exception:
                                             nE[cusFieldSet["name"]] = "" #Empty field
-                                        else:
-                                            if cusValue["_id"] == cFields["value"]: nE[cusFieldSet["name"]] = cusValue["name"]
                                 elif cusFieldSet["type"] == "checkbox":
                                     if cusFieldSet["settings"] == {}: nE[cusFieldSet["name"]] = ""
                                     else: nE[cusFieldSet["name"]] = "X"
@@ -137,7 +140,7 @@ def createExportList(eL, userAllData, lists, swimlanes, cFAllData, fieldMap):
             # Checks if field is part of export
             nE = copyCheck(cF, card, nE, userAllData, lists, swimlanes, cFAllData, fieldMap)
         # Finally add a counter field = 1 to have a measure
-        nE['counter'] = "1"
+        nE['counter'] = 1
         # Append dataset
         nL = nL + [nE]
     return nL
@@ -149,8 +152,12 @@ def createTableStructure(exportList):
     for item in exportList:
         for field in item:
             dbfield = ''.join(field.split()).lower()
-            tabStr = tabStr + dbfield + " TEXT, "
-            dataModel = dataModel + dbfield + " : String;\n"
+            if dbfield == "counter":
+                tabStr = tabStr + dbfield + " INTEGER, "
+                dataModel = dataModel + dbfield + " : Integer;\n"
+            else:
+                tabStr = tabStr + dbfield + " TEXT, "
+                dataModel = dataModel + dbfield + " : String;\n"
         break #we just want one entry
     dataModel = dataModel + "}"
     return tabStr[:len(tabStr)-2], dataModel    
@@ -162,22 +169,23 @@ def createTable(con, tabStr):
         dbCur.execute("DROP TABLE IF EXISTS CatalogService_Cards")
         print("Dropped old table.")
         tableStructure = "CREATE TABLE IF NOT EXISTS CatalogService_Cards (" + tabStr + ")"
-        print("Created new table.")
         dbCur.execute(tableStructure)
+        print("Created new table.")
     except Exception as e:
-        print("Error occured: " + e + ".")
+        print(e)
 
 # Fill the database
 def insertIntoDb(con,list):
     try:
         dbCur = con.cursor() 
         for item in list:
-            dataSet = ""
+            placeholder = ""
+            dataset = []
             for field in item:
-                dataSet = dataSet + "'" + str(item[field]) + "',"
-            dataSet = dataSet[:len(dataSet)-1] 
-            insertString = "INSERT INTO CatalogService_Cards VALUES (" + dataSet + ")"
-            dbCur.execute(insertString) #'2006-01-05','BUY','RHAT',100,35.14)")
+                placeholder = placeholder + "?," 
+                dataset.append(str(item[field]))
+            placeholder = placeholder[:len(placeholder)-1] 
+            dbCur.execute("INSERT INTO CatalogService_Cards VALUES (" + placeholder + ")", dataset)
     except Exception as e:
         print(e)
 
@@ -203,21 +211,20 @@ def main():
         fMap[fieldmap] = fMapping
     # -------------- Parameters ------------------<<<
 
-    # Get run status - are we an init container?
+    # Get username and password for WeKan
     try:
-        initContainerMode = os.environ['INITMODE']
-        if initContainerMode == "TRUE": 
-            print("Running in InitContainer-Mode.")
-            initContainerMode = True
+        wUsername = os.environ['USERNAME']
+        wPassword = os.environ['PASSWORD']
     except Exception:
-        initContainerMode = False
+        endless_loop("Could not retrieve username and/or password.") # Stop here
+
     # Start retrieving data from WeKan
     loopCondition = True
     while loopCondition:
 
         print("Starting new data retrieval.")
         # Login to WeKan and get Token
-        token = getToken(wekanUrl)
+        token = getToken(wekanUrl, wUsername, wPassword)
         # Get list of users 
         users = getWekanData(wekanUrl, token, "users")
         # Get user detailed list
@@ -260,17 +267,15 @@ def main():
             insertIntoDb(conSql, exportList)
             conSql.commit()
             conSql.close()
-        if initContainerMode:
-            loopCondition = False
-            dataModelCds = open("./dbdata/data-model.cds", "w")
-            writtenBytes = dataModelCds.write(dataModel)
-            dataModelCds.close()
-            print("data-model.cds: " + str(writtenBytes) + " bytes written to shared folder.")
-            print("-------------- Initial run complete - ending program --------------")
-        else:
-            # Wait before the next call
-            print("Completed data polling and wrote new database successfully. Sleeping now for " + str(refreshTimer) + " seconds.")
-            time.sleep(refreshTimer)
+            # Create data-model.cds if it doesn't exist
+            if not os.path.isfile("./dbdata/data-model.cds"):
+                dataModelCds = open("./dbdata/data-model.cds", "w")
+                writtenBytes = dataModelCds.write(dataModel)
+                dataModelCds.close()
+                print("data-model.cds: " + str(writtenBytes) + " bytes written to shared folder.")   
+        # Wait before the next call
+        print("Completed data polling and wrote new database successfully. Sleeping now for " + str(refreshTimer) + " seconds.")
+        time.sleep(refreshTimer)
 
 if __name__ == "__main__":
     main()

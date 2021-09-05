@@ -12,8 +12,8 @@ RUN pip install -r requirements.txt
 
 # copy the content of the local src directory to the working directory
 COPY dataRetriever.py .
-RUN mkdir ./config
-COPY config/* ./config
+#RUN mkdir ./config
+#COPY config/* ./config
 
 # command to run on container start
 CMD [ "python", "./dataRetriever.py" ]
