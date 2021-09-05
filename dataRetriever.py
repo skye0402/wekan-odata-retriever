@@ -149,6 +149,7 @@ def createExportList(eL, userAllData, lists, swimlanes, cFAllData, fieldMap):
 def createTableStructure(exportList):
     tabStr = ""
     dataModel = "namespace wekan.export;\n\nentity Cards {\n"
+    fieldSequence = []
     for item in exportList:
         for field in item:
             dbfield = ''.join(field.split()).lower()
@@ -158,9 +159,10 @@ def createTableStructure(exportList):
             else:
                 tabStr = tabStr + dbfield + " TEXT, "
                 dataModel = dataModel + dbfield + " : String;\n"
+            fieldSequence.append(field) # This defines the field sequence for all cards
         break #we just want one entry
     dataModel = dataModel + "}"
-    return tabStr[:len(tabStr)-2], dataModel    
+    return tabStr[:len(tabStr)-2], dataModel, fieldSequence 
 
 # Creates the sqlite table    
 def createTable(con, tabStr):
@@ -175,13 +177,13 @@ def createTable(con, tabStr):
         print(e)
 
 # Fill the database
-def insertIntoDb(con,list):
+def insertIntoDb(con,list, fieldSequence):
     try:
         dbCur = con.cursor() 
-        for item in list:
+        for item in list: # Loop over dataset
             placeholder = ""
             dataset = []
-            for field in item:
+            for field in fieldSequence: # To ensure a consistent sequence
                 placeholder = placeholder + "?," 
                 dataset.append(str(item[field]))
             placeholder = placeholder[:len(placeholder)-1] 
@@ -256,7 +258,7 @@ def main():
         exportList = createExportList(masterList, userAllData, lists, swimlanes, cFAllData, fMap)
 
         # Then store the list as SQLite DB to be picked up by CAP
-        tableStructure,dataModel = createTableStructure(exportList)
+        tableStructure, dataModel, fieldSequence = createTableStructure(exportList)
         conSql=None
         try:
             conSql = sqlite3.connect('./dbdata/wekan-items.db')
@@ -264,7 +266,7 @@ def main():
             print(e)
         if conSql != None:
             createTable(conSql, tableStructure)
-            insertIntoDb(conSql, exportList)
+            insertIntoDb(conSql, exportList, fieldSequence)
             conSql.commit()
             conSql.close()
             # Create data-model.cds if it doesn't exist
