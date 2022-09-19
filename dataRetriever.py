@@ -14,8 +14,8 @@ def endless_loop(msg):
 
 def getToken(url, wUsername, wPassword):
     callUrl = url + "users/login"
-    headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "*/*"}
-    body = { "username": wUsername, "password": wPassword}
+    headers = {"Content-Type": "application/json"}
+    body = json.dumps({ "username": wUsername, "password": wPassword })
     response = requests.post(callUrl, headers = headers, data = body ) #TODO
     data = json.loads(response.text)
     print("Login to WeKan with response status " + str(response.status_code) + ".")
@@ -58,8 +58,8 @@ def copyCustomFields(cF, card, nE, cFAllData):
                                         except Exception:
                                             nE[cusFieldSet["name"]] = "" #Empty field
                                 elif cusFieldSet["type"] == "checkbox":
-                                    if cusFieldSet["settings"] == {}: nE[cusFieldSet["name"]] = ""
-                                    else: nE[cusFieldSet["name"]] = "X"
+                                    if cFields["value"] == True: nE[cusFieldSet["name"]] = "X"
+                                    else: nE[cusFieldSet["name"]] = ""
     return nE
 
 def copyListName(cF, card, nE, lists, fieldMap):
@@ -97,7 +97,7 @@ def copyUserName(cF, card, nE, userAllData):
                 nE["Creator"] = user["username"] #Backup in case full name is not maintained
             return nE
 
-def copyAssignees(cF, card, nE, userAllData):
+def copyAssignees(cF, card, nE, nA, userAllData):
     strAssignees = ""
     lenAss = len(card["assignees"])
     for i in range(lenAss):
@@ -108,47 +108,54 @@ def copyAssignees(cF, card, nE, userAllData):
                 except Exception as e:
                     ass = user["username"] #Backup in case full name is not maintained
                 strAssignees = strAssignees + ass
+                nAss = {}
+                nAss['_id'] = card['_id']
+                nAss['assignee'] = ass
+                nAss['counter'] = 1
+                nA.append(nAss)
                 if i < (lenAss -1): strAssignees = strAssignees + "/"
     nE["Assignees"] = strAssignees
-    return nE
+    return nE, nA
 
 # Mapping function
-def copyCheck(cF, card, nE, userAllData, lists, swimlanes, cFAllData, fieldMap):
-    if cF == '_id': return copyAsIs(cF, card, nE)
-    elif cF == 'title': return copyAsIs(cF, card, nE)
-    elif cF == 'customFields': return copyCustomFields(cF, card, nE, cFAllData)
-    elif cF == 'listId': return copyListName(cF, card, nE, lists, fieldMap)
-    elif cF == 'swimlaneId': return copySwimLaneName(cF, card, nE, swimlanes, fieldMap)
-    elif cF == 'type': return copyAsIs(cF, card, nE)
-    elif cF == 'archived': return copyAsIs(cF, card, nE)
-    elif cF == 'createdAt': return copyAsIs(cF, card, nE, True)
-    elif cF == 'modifiedAt': return copyAsIs(cF, card, nE, True)
-    elif cF == 'dateLastActivity': return copyAsIs(cF, card, nE, True)
-    #elif cF == 'description': return copyAsIs(cF, card, nE)
-    elif cF == 'requestedBy': return copyAsIs(cF, card, nE)
-    elif cF == 'assignees': return copyAssignees(cF, card, nE, userAllData)
-    elif cF == 'userId': return copyUserName(cF, card, nE, userAllData)
-    #elif cF == 'dueAt': return copyAsIs(cF, card, nE, True) #needs some more thinking as due-date is only on some cards
+def copyCheck(cF, card, nE, nA, userAllData, lists, swimlanes, cFAllData, fieldMap):
+    if cF == '_id': nE = copyAsIs(cF, card, nE)
+    elif cF == 'title': nE = copyAsIs(cF, card, nE)
+    elif cF == 'customFields': nE = copyCustomFields(cF, card, nE, cFAllData)
+    elif cF == 'listId': nE = copyListName(cF, card, nE, lists, fieldMap)
+    elif cF == 'swimlaneId': nE = copySwimLaneName(cF, card, nE, swimlanes, fieldMap)
+    elif cF == 'type': nE = copyAsIs(cF, card, nE)
+    elif cF == 'archived': nE = copyAsIs(cF, card, nE)
+    elif cF == 'createdAt': nE = copyAsIs(cF, card, nE, True)
+    elif cF == 'modifiedAt': nE = copyAsIs(cF, card, nE, True)
+    elif cF == 'dateLastActivity': nE = copyAsIs(cF, card, nE, True)
+    #elif cF == 'description': nE = copyAsIs(cF, card, nE)
+    elif cF == 'requestedBy': nE = copyAsIs(cF, card, nE)
+    elif cF == 'assignees': nE, nA = copyAssignees(cF, card, nE, nA, userAllData)
+    elif cF == 'userId': nE = copyUserName(cF, card, nE, userAllData)
+    #elif cF == 'dueAt': nE = copyAsIs(cF, card, nE, True) #needs some more thinking as due-date is only on some cards
     else:
-        return nE # Pass back unchanged
+        pass # No special handling
+    return nE, nA # Pass back unchanged
 
 def createExportList(eL, userAllData, lists, swimlanes, cFAllData, fieldMap):
-    nL = []
+    nL = [] # Holds the cards data
+    nA = [] # Holds the list of assignees per card
     for card in eL:
         nE = {}
         for cF in card:
             # Checks if field is part of export
-            nE = copyCheck(cF, card, nE, userAllData, lists, swimlanes, cFAllData, fieldMap)
+            nE, nA = copyCheck(cF, card, nE, nA, userAllData, lists, swimlanes, cFAllData, fieldMap)
         # Finally add a counter field = 1 to have a measure
         nE['counter'] = 1
         # Append dataset
         nL = nL + [nE]
-    return nL
+    return nL, nA
 
 # To define the structure of the table
-def createTableStructure(exportList):
+def createTableStructure(exportList, entityName):
     tabStr = ""
-    dataModel = "namespace wekan.export;\n\nentity Cards {\n"
+    dataModel = "entity " + entityName + " {\n"
     fieldSequence = []
     for item in exportList:
         for field in item:
@@ -156,6 +163,9 @@ def createTableStructure(exportList):
             if dbfield == "counter":
                 tabStr = tabStr + dbfield + " INTEGER, "
                 dataModel = dataModel + dbfield + " : Integer;\n"
+            elif dbfield == "_id":
+                tabStr = tabStr + dbfield + " TEXT, "
+                dataModel = dataModel + "key " + dbfield + " : String;\n"
             else:
                 tabStr = tabStr + dbfield + " TEXT, "
                 dataModel = dataModel + dbfield + " : String;\n"
@@ -165,19 +175,19 @@ def createTableStructure(exportList):
     return tabStr[:len(tabStr)-2], dataModel, fieldSequence 
 
 # Creates the sqlite table    
-def createTable(con, tabStr):
+def createTable(con, tabStr, entityName):
     try:
         dbCur = con.cursor()
-        dbCur.execute("DROP TABLE IF EXISTS CatalogService_Cards")
+        dbCur.execute("DROP TABLE IF EXISTS CatalogService_"+ entityName)
         print("Dropped old table.")
-        tableStructure = "CREATE TABLE IF NOT EXISTS CatalogService_Cards (" + tabStr + ")"
+        tableStructure = "CREATE TABLE IF NOT EXISTS CatalogService_"+ entityName +" (" + tabStr + ")"
         dbCur.execute(tableStructure)
         print("Created new table.")
     except Exception as e:
         print(e)
 
 # Fill the database
-def insertIntoDb(con,list, fieldSequence):
+def insertIntoDb(con,list, fieldSequence, entityName):
     try:
         dbCur = con.cursor() 
         for item in list: # Loop over dataset
@@ -187,7 +197,7 @@ def insertIntoDb(con,list, fieldSequence):
                 placeholder = placeholder + "?," 
                 dataset.append(str(item[field]))
             placeholder = placeholder[:len(placeholder)-1] 
-            dbCur.execute("INSERT INTO CatalogService_Cards VALUES (" + placeholder + ")", dataset)
+            dbCur.execute("INSERT INTO CatalogService_"+ entityName +" VALUES (" + placeholder + ")", dataset)
     except Exception as e:
         print(e)
 
@@ -255,26 +265,41 @@ def main():
 
         print("Retrieved all data. Creating export list.")
         # Let's create an enriched list for export
-        exportList = createExportList(masterList, userAllData, lists, swimlanes, cFAllData, fMap)
+        exportList, exportAssigneeList = createExportList(masterList, userAllData, lists, swimlanes, cFAllData, fMap)
 
         # Then store the list as SQLite DB to be picked up by CAP
-        tableStructure, dataModel, fieldSequence = createTableStructure(exportList)
+        tableStructureC, dataModelC, fieldSequenceC = createTableStructure(exportList, "Cards")
+        tableStructureA, dataModelA, fieldSequenceA = createTableStructure(exportAssigneeList, "Assignees")
+        dataModel = "namespace wekan.export;\n\n" + dataModelC + "\n\n" + dataModelA
+
         conSql=None
         try:
             conSql = sqlite3.connect('./dbdata/wekan-items.db')
         except Exception as e:
             print(e)
         if conSql != None:
-            createTable(conSql, tableStructure)
-            insertIntoDb(conSql, exportList, fieldSequence)
+            createTable(conSql, tableStructureC, "Cards")
+            insertIntoDb(conSql, exportList, fieldSequenceC, "Cards")
             conSql.commit()
             conSql.close()
+            print("Card table written.")
             # Create data-model.cds if it doesn't exist
             if not os.path.isfile("./dbdata/data-model.cds"):
                 dataModelCds = open("./dbdata/data-model.cds", "w")
                 writtenBytes = dataModelCds.write(dataModel)
                 dataModelCds.close()
-                print("data-model.cds: " + str(writtenBytes) + " bytes written to shared folder.")   
+                print("data-model.cds: " + str(writtenBytes) + " bytes written to shared folder.")  
+        conSql=None
+        try:
+            conSql = sqlite3.connect('./dbdata/wekan-items.db')
+        except Exception as e:
+            print(e)
+        if conSql != None:
+            createTable(conSql, tableStructureA, "Assignees")
+            insertIntoDb(conSql, exportAssigneeList, fieldSequenceA, "Assignees")
+            conSql.commit()
+            conSql.close() 
+            print("Assignee table written.")
         # Wait before the next call
         print("Completed data polling and wrote new database successfully. Sleeping now for " + str(refreshTimer) + " seconds.")
         time.sleep(refreshTimer)
