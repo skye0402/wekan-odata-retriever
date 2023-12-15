@@ -60,6 +60,11 @@ def copyCustomFields(cF, card, nE, cFAllData):
                                 elif cusFieldSet["type"] == "checkbox":
                                     if cFields["value"] == True: nE[cusFieldSet["name"]] = "X"
                                     else: nE[cusFieldSet["name"]] = ""
+                                elif cusFieldSet["type"] == "number":
+                                    if cFields["value"] == None:
+                                        nE[cusFieldSet["name"]] = ""
+                                    else:
+                                        nE[cusFieldSet["name"]] = cFields["value"]
     return nE
 
 def copyListName(cF, card, nE, lists, fieldMap):
@@ -199,7 +204,7 @@ def insertIntoDb(con,list, fieldSequence, entityName):
             placeholder = placeholder[:len(placeholder)-1] 
             dbCur.execute("INSERT INTO CatalogService_"+ entityName +" VALUES (" + placeholder + ")", dataset)
     except Exception as e:
-        print(e)
+        print(f"Error occured (insertDb): {e}.")
 
 def main():
     # Get configuration
@@ -225,8 +230,8 @@ def main():
 
     # Get username and password for WeKan
     try:
-        wUsername = os.environ['USERNAME']
-        wPassword = os.environ['PASSWORD']
+        wUsername = os.environ.get('WUSERNAME',"Gunter")
+        wPassword = os.environ.get('PASSWORD',"pdapda0402")
     except Exception:
         endless_loop("Could not retrieve username and/or password.") # Stop here
 
@@ -276,7 +281,7 @@ def main():
         try:
             conSql = sqlite3.connect('./dbdata/wekan-items.db')
         except Exception as e:
-            print(e)
+            print(f"Error connecting to SQL database: {str(e)}")
         if conSql != None:
             createTable(conSql, tableStructureC, "Cards")
             insertIntoDb(conSql, exportList, fieldSequenceC, "Cards")
@@ -288,7 +293,8 @@ def main():
                 dataModelCds = open("./dbdata/data-model.cds", "w")
                 writtenBytes = dataModelCds.write(dataModel)
                 dataModelCds.close()
-                print("data-model.cds: " + str(writtenBytes) + " bytes written to shared folder.")  
+                print("data-model.cds: " + str(writtenBytes) + " bytes written to shared folder.")
+            print(f"{len(tableStructureC)} cards written.")
         conSql=None
         try:
             conSql = sqlite3.connect('./dbdata/wekan-items.db')
@@ -300,6 +306,7 @@ def main():
             conSql.commit()
             conSql.close() 
             print("Assignee table written.")
+        print(f"{len(tableStructureA)} assignees written.")
         # Wait before the next call
         print("Completed data polling and wrote new database successfully. Sleeping now for " + str(refreshTimer) + " seconds.")
         time.sleep(refreshTimer)

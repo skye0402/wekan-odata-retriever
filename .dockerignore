@@ -4,3 +4,5 @@ Dockerfile
 #config
 .gitignore
 .dockerignore
+parameters.ps1
+wekan-items.db
